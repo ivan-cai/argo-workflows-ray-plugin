@@ -8,17 +8,23 @@ import (
 	rayjob "github.com/ray-project/kuberay/ray-operator/apis/ray/v1"
 	rayversioned "github.com/ray-project/kuberay/ray-operator/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 	"net/http"
+	"strings"
 	"time"
 )
 
 const (
-	LabelKeyWorkflow string = "workflows.argoproj.io/workflow"
+	LabelKeyWorkflow    string = "workflows.argoproj.io/workflow"
+	LabelKeyClusterName string = "clustername"
 )
 
 type RayJobController struct {
-	RayClient *rayversioned.Clientset
+	RayClient  *rayversioned.Clientset
+	KubeClient *kubernetes.Clientset
 }
 
 type RayPluginBody struct {
@@ -39,6 +45,13 @@ func (ct *RayJobController) ExecuteRayJob(ctx *gin.Context) {
 
 	pluginJson, _ := c.Template.Plugin.MarshalJSON()
 	klog.Info("Receive: ", string(pluginJson))
+	if !strings.Contains(string(pluginJson), "RayJob") {
+		klog.Info("### no ray job in plugin")
+		ctx.AbortWithStatusJSON(200, gin.H{})
+		return
+	} else {
+		klog.Info("### found ray job in plugin")
+	}
 	err = json.Unmarshal(pluginJson, &inputBody)
 	if err != nil {
 		klog.Error(err)
@@ -57,6 +70,32 @@ func (ct *RayJobController) ExecuteRayJob(ctx *gin.Context) {
 	}
 
 	var exists = false
+
+	clustername := ""
+	labels := inputBody.RayJob.Labels
+	if _, ok := labels[LabelKeyClusterName]; ok {
+		clustername = labels[LabelKeyClusterName]
+	}
+
+	if clustername != "" {
+		secret, err := ct.KubeClient.CoreV1().Secrets(job.Namespace).Get(ctx, clustername, metav1.GetOptions{})
+		if err != nil {
+			klog.Error(err)
+			ct.Response404(ctx)
+			return
+		}
+		if secret.Data["kubeconfig"] != nil {
+			klog.Info("### found kubeconfig in secret: ", clustername)
+			kubeconfig := string(secret.Data["kubeconfig"])
+			config, err := clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfig))
+			if err != nil {
+				klog.Error(err)
+				ct.Response404(ctx)
+				return
+			}
+			ct.RayClient = getRayClient(config)
+		}
+	}
 
 	// 1. query job exists
 	existsJob, err := ct.RayClient.RayV1().RayJobs(job.Namespace).Get(ctx, job.Name, metav1.GetOptions{})
@@ -159,6 +198,10 @@ func (ct *RayJobController) Response404(ctx *gin.Context) {
 	ctx.AbortWithStatus(http.StatusNotFound)
 }
 
+func (ct *RayJobController) Response200(ctx *gin.Context) {
+	ctx.AbortWithStatus(http.StatusOK)
+}
+
 func InjectRayJobWithWorkflowName(job *rayjob.RayJob, workflowName string) {
 	headGroupSpec := job.Spec.RayClusterSpec.HeadGroupSpec
 	if headGroupSpec.Template.ObjectMeta.Labels != nil {
@@ -183,4 +226,14 @@ func InjectRayJobWithWorkflowName(job *rayjob.RayJob, workflowName string) {
 
 	job.Spec.RayClusterSpec.HeadGroupSpec = headGroupSpec
 	job.Spec.RayClusterSpec.WorkerGroupSpecs = workerGroupSpecs
+}
+
+// GetRayClient get a clientset for Ray Job.
+func getRayClient(restConfig *rest.Config) *rayversioned.Clientset {
+	clientset, err := rayversioned.NewForConfig(restConfig)
+	klog.Info(clientset.ServerVersion())
+	if err != nil {
+		klog.Fatal(err)
+	}
+	return clientset
 }

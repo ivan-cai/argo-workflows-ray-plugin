@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	rayversioned "github.com/ray-project/kuberay/ray-operator/pkg/client/clientset/versioned"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"path/filepath"
 
@@ -51,7 +52,8 @@ func (o *option) runE(c *cobra.Command, args []string) (err error) {
 
 	ct := &controller.RayJobController{}
 	rayClient := getRayClient(config)
-
+	kubeClient := getKubeClient(config)
+	ct.KubeClient = kubeClient
 	ct.RayClient = rayClient
 	router := gin.Default()
 	router.POST("/api/v1/template.execute", ct.ExecuteRayJob)
@@ -65,6 +67,14 @@ func (o *option) runE(c *cobra.Command, args []string) (err error) {
 func getRayClient(restConfig *rest.Config) *rayversioned.Clientset {
 	clientset, err := rayversioned.NewForConfig(restConfig)
 	klog.Info(clientset.ServerVersion())
+	if err != nil {
+		klog.Fatal(err)
+	}
+	return clientset
+}
+
+func getKubeClient(restConfig *rest.Config) *kubernetes.Clientset {
+	clientset, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
 		klog.Fatal(err)
 	}
