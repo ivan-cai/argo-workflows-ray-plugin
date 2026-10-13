@@ -30,7 +30,7 @@ spec:
 2. Build argo-ray-plugin image
 
 ```
-git clone https://github.com/shuangkun/argo-workflows-ray-plugin.git
+git clone https://github.com/argoproj-labs/argo-workflows-ray-plugin.git
 cd argo-workflows-ray-plugin
 docker build -t argo-ray-plugin:v1 .
 ```
@@ -68,7 +68,7 @@ spec:
             runtimeEnv: |
               pip:
                 - requests==2.26.0
-            clusterSpec:
+            rayClusterSpec:
               headGroupSpec:
                 rayStartParams:
                   dashboard-host: '0.0.0.0'
